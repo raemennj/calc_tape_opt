@@ -1940,11 +1940,14 @@
       velX = 0;
       didMove = false;
       cachedViewW = viewport.offsetWidth || 300;
-      // Don't capture here — wait until the drag threshold is crossed in pointermove.
-      // Capturing immediately prevents button click/dblclick/long-press from firing.
+      // Don't use setPointerCapture — that steals events from buttons inside.
+      // Instead, attach document-level listeners so swipes track across the screen.
+      document.addEventListener('pointermove', onDocMove, { passive: false });
+      document.addEventListener('pointerup', onDocUp, { passive: true });
+      document.addEventListener('pointercancel', onDocCancel, { passive: true });
     }, { passive: true });
 
-    viewport.addEventListener('pointermove', (e) => {
+    function onDocMove(e) {
       if (e.pointerId !== dragPid) return;
       currentX = e.clientX;
       const dx = currentX - startX;
@@ -1954,15 +1957,10 @@
       lastX = e.clientX;
       lastT = now;
 
-      if (Math.abs(dx) > 6 && !didMove) {
-        didMove = true;
-        // Grab pointer capture now that we're sure the user is dragging (not tapping a button)
-        try { viewport.setPointerCapture(e.pointerId); } catch (_) { }
-      }
+      if (Math.abs(dx) > 6) didMove = true;
       if (!didMove) return;
 
       const viewW = cachedViewW;
-      // Offset from the PADDED position (carouselIndex + 1 skips the leading clone)
       const paddedStart = carouselIndex + 1;
       const track = document.getElementById('memoryTrack');
       if (track) {
@@ -1970,16 +1968,23 @@
         track.style.transform = `translateX(${-(paddedStart * viewW) + dx}px)`;
       }
       e.preventDefault();
-    }, { passive: false });
+    }
 
-    function endDrag(e) {
+    function cleanupDocListeners() {
+      document.removeEventListener('pointermove', onDocMove);
+      document.removeEventListener('pointerup', onDocUp);
+      document.removeEventListener('pointercancel', onDocCancel);
+    }
+
+    function onDocUp(e) {
       if (e.pointerId !== dragPid) return;
+      cleanupDocListeners();
       dragPid = null;
 
       const track = document.getElementById('memoryTrack');
       if (track) track.classList.remove('is-dragging');
 
-      if (!didMove) return;
+      if (!didMove) return;  // was a tap — let button handle its own click
 
       const dx = currentX - startX;
       const viewW = cachedViewW || viewport.offsetWidth || 300;
@@ -1992,15 +1997,10 @@
       if ((ratio >= 0.5 || fling) && Math.abs(dx) > 15) {
         const dir = dx < 0 ? 1 : -1;
         const rawTarget = carouselIndex + dir;
-        // Wrap instead of clamp — this is what enables the infinite loop
         const realTarget = ((rawTarget % N) + N) % N;
         const isWrapping = rawTarget !== realTarget;
 
         if (isWrapping && track) {
-          // ── Wrap path ────────────────────────────────────────────────────
-          // 1. Animate into the adjacent clone (looks like crossing the boundary naturally)
-          // 2. Once the animation settles, silently teleport to the real page
-          //    (clone and real page look identical → no visible jump)
           const clonePaddedIdx = dir === 1 ? N + 1 : 0;
           setCarouselTrackPosition(clonePaddedIdx, true);
 
@@ -2011,10 +2011,8 @@
             commitCarouselPage(realTarget);
           };
           track.addEventListener('transitionend', teleport, { once: true });
-          // Fallback in case transitionend doesn't fire (e.g. reduced-motion, already at dest)
           setTimeout(teleport, 350);
         } else {
-          // ── Normal path ──────────────────────────────────────────────────
           commitCarouselPage(rawTarget);
         }
       } else {
@@ -2023,19 +2021,14 @@
       }
     }
 
-    viewport.addEventListener('pointerup', endDrag, { passive: true });
-    viewport.addEventListener('pointercancel', (e) => {
+    function onDocCancel(e) {
       if (e.pointerId !== dragPid) return;
-      dragPid = null;
-      setCarouselTrackPosition(carouselIndex + 1, true);
-    }, { passive: true });
-    viewport.addEventListener('lostpointercapture', (e) => {
-      if (e.pointerId !== dragPid) return;
+      cleanupDocListeners();
       dragPid = null;
       const track = document.getElementById('memoryTrack');
       if (track) track.classList.remove('is-dragging');
       setCarouselTrackPosition(carouselIndex + 1, true);
-    }, { passive: true });
+    }
   }
 
 
