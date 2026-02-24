@@ -388,6 +388,46 @@ body {
   opacity: 0.65;
 }
 
+/* Page indicator: tiny label + dot pips below the carousel strip */
+.carousel-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px 0;
+  height: 12px;
+  pointer-events: none;
+}
+
+.carousel-label {
+  font-size: 9px;
+  letter-spacing: .04em;
+  color: var(--btn-fg, #888);
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+}
+
+.carousel-dots {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.carousel-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--btn-fg, #888);
+  opacity: 0.3;
+  transition: opacity .18s, transform .18s;
+}
+
+.carousel-dot.is-active {
+  opacity: 1;
+  transform: scale(1.35);
+}
 
 /* ---------- Console (5×4) ---------- */
 .console {
@@ -508,6 +548,34 @@ body {
   --_btn-fg: #083f3f;
   touch-action: none;
   user-select: none;
+}
+
+/* Controls-page action buttons — same colour as C / Back */
+.btn.mem.mem-ctrl {
+  --_btn-bg: var(--clear);
+  --_btn-fg: #fff;
+}
+
+/* Set-name input in Memory Centre modal */
+.mc-set-name {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, .08);
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 13px;
+  padding: 4px 8px;
+  outline: none;
+}
+
+.mc-set-name:focus {
+  border-color: rgba(255, 255, 255, .45);
+  background: rgba(255, 255, 255, .13);
+}
+
+.mc-set-name::placeholder {
+  color: rgba(255, 255, 255, .35);
 }
 
 /* Hover (only on devices that support hover) */

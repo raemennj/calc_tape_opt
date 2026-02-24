@@ -87,6 +87,25 @@
   const ro = new ResizeObserver(computeTile);
   ro.observe(document.getElementById('card'));
 
+  // Always-current pixel width for the carousel viewport — updated by ResizeObserver
+  // so positioning is correct even before the first tile computation.
+  let carouselPageW = 0;
+  const carouselViewport = document.getElementById('memoryViewport');
+  if (carouselViewport) {
+    const carouselRO = new ResizeObserver(entries => {
+      carouselPageW = entries[0]?.contentRect.width || carouselViewport.offsetWidth || 0;
+      // Re-position the track immediately so it doesn't jump after first paint
+      const track = document.getElementById('memoryTrack');
+      if (track && carouselPageW > 0) {
+        // Instant jump (no animation) — suppress transition
+        track.classList.add('is-dragging');
+        track.style.transform = `translateX(${-(carouselIndex + 1) * carouselPageW}px)`;
+        requestAnimationFrame(() => track.classList.remove('is-dragging'));
+      }
+    });
+    carouselRO.observe(carouselViewport);
+  }
+
   function initPortraitLock() {
     const orientation = window.screen?.orientation;
     if (!orientation?.lock) return;
@@ -1264,11 +1283,15 @@
       showToast('This button set is already saved.');
       return;
     }
+    // Use typed name if provided, otherwise fall back to default
+    const nameEl = document.getElementById('mcSetName');
+    const typedName = nameEl?.value.trim() || '';
     const set = {
       id: uid(),
-      name: defaultSetName(memorySets.length + 1),
+      name: typedName || defaultSetName(memorySets.length + 1),
       values
     };
+    if (nameEl) nameEl.value = '';  // clear for next use
     memorySets.push(set);
     saveMemorySets();
     renderMemorySets();
@@ -1294,8 +1317,8 @@
       memorySlots[i] = cleaned[i] ?? null;
     }
     saveMemory();
-    // Always land on page 0 (live interactive buttons) so all button actions work
-    carouselIndex = 0;
+    // Land on page 1 (Live interactive buttons) — page 0 is the Controls page
+    carouselIndex = 1;
     refreshMemLabels();
     renderMemoryLiveRow();
     const name = (set.name && set.name.trim()) || defaultSetName(setIndex + 1);
@@ -1321,6 +1344,10 @@
       }
     });
     document.getElementById('mcSaveCurrent')?.addEventListener('click', addCurrentSlotsAsSet);
+    // Enter in the name field triggers Save Slots
+    document.getElementById('mcSetName')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); addCurrentSlotsAsSet(); }
+    });
   });
 
   const memSetsListEl = document.getElementById('memSetsList');
@@ -1764,10 +1791,14 @@
   // null page = shows current memorySlots values + full tap/store behavior
   // saved set pages = preview of that set; tap inserts value; dblclick/hold stores current
 
-  let carouselIndex = 0;   // 0 = blank page, 1..N = saved set pages
+  let carouselIndex = 1;   // 1 = Live M1-M5 (controls page is 0, to the left)
+
+  // Sentinel for the controls carousel page (not a real saved set)
+  const CONTROLS_PAGE = { type: 'controls' };
 
   function getCarouselPages() {
-    return [null, ...memorySets];
+    // Page 0 = controls (Clear/Save), Page 1 = Live M1-M5 (null), Pages 2+ = saved sets
+    return [CONTROLS_PAGE, null, ...memorySets];
   }
 
   // Attach full tap/dblclick/longpress behavior (same as the old static btn.mem block)
@@ -1831,33 +1862,74 @@
 
     function buildPage(pageData, realIdx, isClone) {
       const page = document.createElement('div');
+      const isLive = pageData === null;
+      const isControls = pageData && pageData.type === 'controls';
       page.className = 'memory-page' +
         (!isClone && realIdx === carouselIndex ? ' is-active' : '');
-      // Clones are decorative — no pointer events
       if (isClone) page.style.pointerEvents = 'none';
 
-      for (let i = 0; i < MEMORY_SLOT_COUNT; i++) {
-        const btn = document.createElement('button');
-        btn.className = 'btn mem';
-        btn.dataset.mem = i;
-        btn.dataset.pageIdx = realIdx;
-
-        const span = document.createElement('span');
-        span.className = 'btn-label';
-
-        if (pageData === null) {
-          const v = memorySlots[i];
-          span.textContent = (v != null) ? formatResultInchOnlyLabel(v) : `M${i + 1}`;
+      if (isControls) {
+        // ── Controls page: CLEAR | * | * | * | SAVE ──────────────────────
+        const labels = ['CLEAR', '*', '*', '*', 'SAVE'];
+        labels.forEach((label, i) => {
+          const btn = document.createElement('button');
+          btn.className = 'btn mem' + (i === 0 || i === 4 ? ' mem-ctrl' : '');
+          btn.dataset.mem = i;
+          const span = document.createElement('span');
+          span.className = 'btn-label';
+          span.textContent = label;
           btn.appendChild(span);
-          if (!isClone) attachMemBtnFull(btn);
-        } else {
-          const raw = pageData.values?.[i];
-          const v = sanitizeMemoryValue(raw);
-          span.textContent = (v != null) ? formatResultInchOnlyLabel(v) : `M${i + 1}`;
-          btn.appendChild(span);
-          if (!isClone) attachMemBtnPreview(btn, v);
+
+          if (!isClone) {
+            if (i === 0) {
+              // CLEAR — same as modal Clear Slots
+              btn.addEventListener('click', () => clearMemorySlots());
+            } else if (i === 4) {
+              // SAVE — open modal on History tab, pre-fill name, focus input
+              btn.addEventListener('click', () => {
+                const nameEl = document.getElementById('mcSetName');
+                const defaultName = defaultSetName(memorySets.length + 1);
+                if (nameEl) {
+                  nameEl.placeholder = defaultName;
+                  nameEl.value = '';
+                }
+                window._cmOpen?.('cmPanelHistory');
+                setTimeout(() => {
+                  document.getElementById('mcSetName')?.focus();
+                  document.getElementById('memCenter')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }, 80);
+              });
+            }
+            // Middle buttons (* placeholder) do nothing for now
+          }
+          page.appendChild(btn);
+        });
+
+      } else {
+        // ── Live or saved-set page ────────────────────────────────────────
+        for (let i = 0; i < MEMORY_SLOT_COUNT; i++) {
+          const btn = document.createElement('button');
+          btn.className = 'btn mem';
+          btn.dataset.mem = i;
+          btn.dataset.pageIdx = realIdx;
+
+          const span = document.createElement('span');
+          span.className = 'btn-label';
+
+          if (isLive) {
+            const v = memorySlots[i];
+            span.textContent = (v != null) ? formatResultInchOnlyLabel(v) : `M${i + 1}`;
+            btn.appendChild(span);
+            if (!isClone) attachMemBtnFull(btn);
+          } else {
+            const raw = pageData.values?.[i];
+            const v = sanitizeMemoryValue(raw);
+            span.textContent = (v != null) ? formatResultInchOnlyLabel(v) : `M${i + 1}`;
+            btn.appendChild(span);
+            if (!isClone) attachMemBtnPreview(btn, v);
+          }
+          page.appendChild(btn);
         }
-        page.appendChild(btn);
       }
       return page;
     }
@@ -1868,22 +1940,40 @@
       track.appendChild(buildPage(pageData, paddedRealIdx[paddedIdx], isClone));
     });
 
-    const viewportEl = document.getElementById('memoryViewport');
-    const pageW = viewportEl ? viewportEl.offsetWidth : 0;
-    track.querySelectorAll('.memory-page').forEach(p => {
-      p.style.width = `${pageW}px`;
-    });
-
-    // Position at padded index = carouselIndex + 1 (skip the leading clone)
+    // No JS width-setting needed — CSS min-width:100% handles it.
+    // Use ResizeObserver-maintained carouselPageW for pixel positioning.
     setCarouselTrackPosition(carouselIndex + 1, false);
     renderMemoryLiveRow();
+    updateCarouselIndicator();
+  }
+
+  function updateCarouselIndicator() {
+    const pages = getCarouselPages();
+    const N = pages.length;
+    const label = document.getElementById('carouselLabel');
+    const dotsEl = document.getElementById('carouselDots');
+    if (!label || !dotsEl) return;
+
+    // Label: show page name
+    if (carouselIndex === 0) {
+      label.textContent = 'Live';
+    } else {
+      const pg = pages[carouselIndex];
+      label.textContent = (pg && pg.name && pg.name.trim()) || `Set ${carouselIndex}`;
+    }
+
+    // Dots: one per page
+    dotsEl.innerHTML = '';
+    for (let i = 0; i < N; i++) {
+      const d = document.createElement('span');
+      d.className = 'carousel-dot' + (i === carouselIndex ? ' is-active' : '');
+      dotsEl.appendChild(d);
+    }
   }
 
   function setCarouselTrackPosition(idx, animate) {
     const track = document.getElementById('memoryTrack');
-    const viewport = document.getElementById('memoryViewport');
-    if (!track || !viewport) return;
-    const pageW = viewport.offsetWidth;
+    if (!track) return;
     if (animate) {
       track.classList.remove('is-dragging');
     } else {
@@ -1891,31 +1981,17 @@
       track.classList.add('is-dragging');
       requestAnimationFrame(() => track.classList.remove('is-dragging'));
     }
-    track.style.transform = `translateX(${-idx * pageW}px)`;
+    // Use carouselPageW — always current thanks to ResizeObserver
+    track.style.transform = `translateX(${-idx * carouselPageW}px)`;
   }
 
   function commitCarouselPage(idx) {
     const pages = getCarouselPages();
     const N = pages.length;
-    // Wrap (not clamp) so callers can pass -1 or N without worrying
-    idx = ((idx % N) + N) % N;
-    const pageData = pages[idx];
-
-    if (pageData !== null) {
-      // Load this saved set into live memory slots
-      const cleaned = (pageData.values || []).map(v => sanitizeMemoryValue(v));
-      for (let i = 0; i < MEMORY_SLOT_COUNT; i++) {
-        memorySlots[i] = cleaned[i] ?? null;
-      }
-      saveMemory();
-      const name = (pageData.name && pageData.name.trim()) || `Set ${idx}`;
-      showToast(`Loaded: ${name}`);
-      // Always land on page 0 (live interactive buttons) so tap/long-press all work
-      carouselIndex = 0;
-    } else {
-      carouselIndex = 0;
-    }
-
+    // Wrap so callers can pass values outside 0..N-1
+    carouselIndex = ((idx % N) + N) % N;
+    // Navigate only — do NOT auto-load. Loading is explicit via the modal load button.
+    // M1-M5 values persist in memorySlots while browsing (natural "temp save").
     renderMemoryCarousel();
   }
 
@@ -1960,10 +2036,10 @@
       if (Math.abs(dx) > 6) didMove = true;
       if (!didMove) return;
 
-      const viewW = cachedViewW;
+      const viewW = carouselPageW || cachedViewW; // carouselPageW always current
       const paddedStart = carouselIndex + 1;
       const track = document.getElementById('memoryTrack');
-      if (track) {
+      if (track && viewW > 0) {
         track.classList.add('is-dragging');
         track.style.transform = `translateX(${-(paddedStart * viewW) + dx}px)`;
       }
@@ -1987,7 +2063,7 @@
       if (!didMove) return;  // was a tap — let button handle its own click
 
       const dx = currentX - startX;
-      const viewW = cachedViewW || viewport.offsetWidth || 300;
+      const viewW = carouselPageW || cachedViewW || 300;
       const pages = getCarouselPages();
       const N = pages.length;
 
